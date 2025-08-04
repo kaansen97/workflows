@@ -1,0 +1,45 @@
+name: Weekly AI/ML LinkedIn Post Generator
+
+on:
+  schedule:
+    # Run every Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+  workflow_dispatch: # Allow manual trigger for testing
+
+jobs:
+  generate-post:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Generate AI/ML weekly post
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+      run: |
+        python scripts/generate_weekly_post.py
+        
+    - name: Commit and push generated post
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add posts/
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Add weekly AI/ML post for $(date +%Y-%m-%d)"
+          git push
+        fi
