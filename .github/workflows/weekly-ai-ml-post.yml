@@ -6,6 +6,10 @@ on:
     - cron: '0 8 * * 1'
   workflow_dispatch: # Allow manual trigger for testing
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   generate-post:
     runs-on: ubuntu-latest
@@ -13,7 +17,9 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      
+      with:
+        token: ${{ github.token }}
+        
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -26,7 +32,6 @@ jobs:
         
     - name: Generate AI/ML weekly post
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
       run: |

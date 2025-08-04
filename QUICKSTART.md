@@ -22,6 +22,11 @@
    - `GEMINI_API_KEY`: Your Gemini key
    - `SERPAPI_KEY`: Your SerpAPI key
 
+**Important**: Make sure GitHub Actions has write permissions:
+- Go to Settings → Actions → General
+- Under "Workflow permissions", select "Read and write permissions"
+- Click "Save"
+
 ### 3. Test the Setup (2 minutes)
 
 **Option A: Manual Trigger**
