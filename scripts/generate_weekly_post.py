@@ -195,7 +195,7 @@ class AIMLPostGenerator:
 
             {context}
 
-            Return only the numbers (1-based) of the selected developments, separated by commas.
+            Return only the numbers (1-based) of the selected developments with detailed explanation, separated by commas.
             """
             
             response = self.gemini_model.generate_content(prompt)
