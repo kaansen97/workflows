@@ -184,7 +184,7 @@ class AIMLPostGenerator:
                 context += f"{i}. {dev['title']}\n   Source: {dev['source']}\n   Summary: {dev['summary'][:200]}...\n\n"
             
             prompt = f"""
-            You are an AI/ML expert curator. From the following developments, select the 3-5 most significant and impactful ones for a LinkedIn post targeting AI/ML professionals.
+            You are an AI/ML expert curator. From the following developments, select the 3-5 most significant and impactful ones for a LinkedIn post targeting AI/ML professionals.Do not use generic news website where you can gather multiple news try to go search for individual news inside those sources 
 
             Consider:
             - Impact on the field
