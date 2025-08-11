@@ -40,28 +40,71 @@ class AIMLPostGenerator:
         
         papers = []
         try:
-            # Use broader search terms to avoid category-specific URL issues
-            search_terms = [
-                "artificial intelligence",
-                "machine learning", 
-                "deep learning",
-                "neural networks",
-                "computer vision"
+            # Fetch recent papers across all categories and filter for AI/ML
+            search = arxiv.Search(
+                query="*",  # Get all recent papers
+                max_results=200,  # Get more papers to filter from
+                sort_by=arxiv.SortCriterion.SubmittedDate
+            )
+            
+            # AI/ML related keywords to filter papers
+            ai_keywords = [
+                'artificial intelligence', 'machine learning', 'deep learning', 
+                'neural network', 'computer vision', 'natural language processing',
+                'reinforcement learning', 'transformer', 'llm', 'large language model',
+                'generative', 'diffusion', 'gpt', 'bert', 'attention', 'classification',
+                'regression', 'supervised', 'unsupervised', 'semi-supervised',
+                'convolutional', 'recurrent', 'lstm', 'gru', 'autoencoder'
             ]
             
-            for term in search_terms[:2]:  # Limit to 2 searches to avoid rate limiting
-                try:
-                    search = arxiv.Search(
-                        query=term,
-                        max_results=15,
-                        sort_by=arxiv.SortCriterion.SubmittedDate
+            count = 0
+            for result in search.results():
+                if count >= 15:  # Limit total papers
+                    break
+                    
+                # Check if published in the last week
+                if result.published.replace(tzinfo=None) >= start_date:
+                    # Check if paper is AI/ML related
+                    title_lower = result.title.lower()
+                    summary_lower = result.summary.lower()
+                    
+                    is_ai_ml = (
+                        any(keyword in title_lower for keyword in ai_keywords) or
+                        any(keyword in summary_lower for keyword in ai_keywords) or
+                        any(category in ['cs.AI', 'cs.LG', 'cs.CV', 'cs.CL', 'cs.NE'] 
+                            for category in [tag.term for tag in result.categories])
                     )
                     
-                    count = 0
-                    for result in search.results():
-                        if count >= 10:  # Limit per search
-                            break
-                        if result.published.replace(tzinfo=None) >= start_date:
+                    if is_ai_ml:
+                        papers.append({
+                            'title': result.title.strip(),
+                            'summary': result.summary.strip()[:300] + "...",
+                            'url': result.entry_id,
+                            'published': result.published.strftime('%Y-%m-%d'),
+                            'authors': [author.name for author in result.authors[:3]],
+                            'source': 'arXiv',
+                            'type': 'paper',
+                            'categories': [tag.term for tag in result.categories]
+                        })
+                        count += 1
+                        
+        except Exception as e:
+            print(f"Error fetching arXiv papers: {e}")
+            # Fallback: try with a simple query
+            try:
+                print("Trying fallback approach...")
+                search = arxiv.Search(
+                    query="all:machine",  # Simple query that should work
+                    max_results=50,
+                    sort_by=arxiv.SortCriterion.SubmittedDate
+                )
+                
+                for result in search.results():
+                    if len(papers) >= 10:
+                        break
+                    if result.published.replace(tzinfo=None) >= start_date:
+                        title_lower = result.title.lower()
+                        if any(keyword in title_lower for keyword in ['machine', 'learning', 'neural', 'ai']):
                             papers.append({
                                 'title': result.title.strip(),
                                 'summary': result.summary.strip()[:300] + "...",
@@ -69,20 +112,10 @@ class AIMLPostGenerator:
                                 'published': result.published.strftime('%Y-%m-%d'),
                                 'authors': [author.name for author in result.authors[:3]],
                                 'source': 'arXiv',
-                                'type': 'paper',
-                                'search_term': term
+                                'type': 'paper'
                             })
-                            count += 1
-                            
-                except Exception as search_error:
-                    print(f"Error with search term '{term}': {search_error}")
-                    continue
-                        
-                if len(papers) >= 15:  # Limit total papers
-                    break
-                    
-        except Exception as e:
-            print(f"Error fetching arXiv papers: {e}")
+            except Exception as fallback_error:
+                print(f"Fallback also failed: {fallback_error}")
             
         # Remove duplicates based on title
         seen_titles = set()
