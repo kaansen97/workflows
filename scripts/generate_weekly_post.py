@@ -185,7 +185,10 @@ class AIMLPostGenerator:
             
             prompt = f"""
             You are an AI/ML expert curator. From the following developments, select the 3-5 most significant and impactful ones for a LinkedIn post targeting AI/ML professionals.Do not use generic news website where you can gather multiple news try to go search for individual news inside those sources 
-
+            for example there are two example websites 
+            https://www.marketingprofs.com/opinions/2025/53515/ai-update-august-1-2025-ai-news-and-views-from-the-past-week
+            https://martech.org/the-latest-ai-powered-martech-news-and-releases/
+            but instead adding them into linkedin go search contents inside of them and add individual impactful news in them 
             Consider:
             - Impact on the field
             - Novelty and innovation
