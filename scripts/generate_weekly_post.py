@@ -40,28 +40,43 @@ class AIMLPostGenerator:
         
         papers = []
         try:
-            # Use individual category searches to avoid URL encoding issues
-            categories = ["cs.AI", "cs.LG", "cs.CV", "cs.CL", "cs.NE"]
+            # Use broader search terms to avoid category-specific URL issues
+            search_terms = [
+                "artificial intelligence",
+                "machine learning", 
+                "deep learning",
+                "neural networks",
+                "computer vision"
+            ]
             
-            for category in categories:
-                search = arxiv.Search(
-                    query=f"cat:{category}",
-                    max_results=20,
-                    sort_by=arxiv.SortCriterion.SubmittedDate
-                )
-                
-                for result in search.results():
-                    if result.published.replace(tzinfo=None) >= start_date:
-                        papers.append({
-                            'title': result.title.strip(),
-                            'summary': result.summary.strip()[:300] + "...",
-                            'url': result.entry_id,
-                            'published': result.published.strftime('%Y-%m-%d'),
-                            'authors': [author.name for author in result.authors[:3]],
-                            'source': 'arXiv',
-                            'type': 'paper',
-                            'category': category
-                        })
+            for term in search_terms[:2]:  # Limit to 2 searches to avoid rate limiting
+                try:
+                    search = arxiv.Search(
+                        query=term,
+                        max_results=15,
+                        sort_by=arxiv.SortCriterion.SubmittedDate
+                    )
+                    
+                    count = 0
+                    for result in search.results():
+                        if count >= 10:  # Limit per search
+                            break
+                        if result.published.replace(tzinfo=None) >= start_date:
+                            papers.append({
+                                'title': result.title.strip(),
+                                'summary': result.summary.strip()[:300] + "...",
+                                'url': result.entry_id,
+                                'published': result.published.strftime('%Y-%m-%d'),
+                                'authors': [author.name for author in result.authors[:3]],
+                                'source': 'arXiv',
+                                'type': 'paper',
+                                'search_term': term
+                            })
+                            count += 1
+                            
+                except Exception as search_error:
+                    print(f"Error with search term '{term}': {search_error}")
+                    continue
                         
                 if len(papers) >= 15:  # Limit total papers
                     break
@@ -226,6 +241,83 @@ class AIMLPostGenerator:
                 continue
         
         return news_items
+    
+    def fetch_ai_model_releases(self) -> List[Dict[str, Any]]:
+        """Fetch recent AI model releases and announcements"""
+        print("Fetching AI model releases...")
+        
+        model_releases = []
+        
+        if not self.serpapi_key:
+            print("No SERPAPI key found, skipping model release search")
+            return model_releases
+            
+        try:
+            # Specific search queries for AI model releases
+            model_queries = [
+                '"new model release" OR "model announcement" site:huggingface.co',
+                '"OpenAI" "new model" OR "model release" 2025',
+                '"Anthropic" "Claude" new model OR release',
+                '"Meta" "Llama" OR "new model" release',
+                '"Google" "Gemini" OR "new model" release',
+                '"Mistral" OR "Qwen" OR "DeepSeek" model release',
+                '"open source" "LLM" OR "language model" release',
+                'site:github.com "model release" OR "new model" AI machine learning'
+            ]
+            
+            for query in model_queries:
+                try:
+                    search = GoogleSearch({
+                        "q": query,
+                        "tbm": "nws",  # News search
+                        "tbs": "qdr:w",  # Past week
+                        "num": 8,
+                        "api_key": self.serpapi_key
+                    })
+                    
+                    results = search.get_dict()
+                    
+                    if "news_results" in results:
+                        for item in results["news_results"]:
+                            title = item.get('title', '')
+                            link = item.get('link', '')
+                            
+                            # Filter for model-specific keywords
+                            model_keywords = [
+                                'model', 'llm', 'gpt', 'claude', 'gemini', 'llama', 
+                                'mistral', 'qwen', 'deepseek', 'release', 'announcement',
+                                'open source', 'hugging face', 'transformer'
+                            ]
+                            
+                            if any(keyword in title.lower() for keyword in model_keywords):
+                                model_releases.append({
+                                    'title': title,
+                                    'summary': item.get('snippet', ''),
+                                    'url': link,
+                                    'published': item.get('date', ''),
+                                    'source': item.get('source', ''),
+                                    'type': 'model_release'
+                                })
+                                
+                except Exception as search_error:
+                    print(f"Error with model query '{query}': {search_error}")
+                    continue
+                        
+        except Exception as e:
+            print(f"Error fetching model releases: {e}")
+            
+        # Remove duplicates
+        unique_models = []
+        seen_titles = set()
+        
+        for item in model_releases:
+            title_lower = item['title'].lower()
+            if not any(seen_title in title_lower or title_lower in seen_title 
+                      for seen_title in seen_titles):
+                seen_titles.add(title_lower)
+                unique_models.append(item)
+                
+        return unique_models[:8]  # Limit results
     
     def fetch_github_trending(self) -> List[Dict[str, Any]]:
         """Fetch trending AI/ML repositories from GitHub"""
@@ -427,6 +519,67 @@ class AIMLPostGenerator:
         
         return post
     
+    def generate_model_compilation(self, all_developments: List[Dict[str, Any]]) -> str:
+        """Generate a technical model compilation section"""
+        
+        # Filter for model releases and relevant technical developments
+        model_developments = [
+            dev for dev in all_developments 
+            if dev.get('type') == 'model_release' or 
+            any(keyword in dev.get('title', '').lower() for keyword in [
+                'model', 'llm', 'gpt', 'claude', 'gemini', 'llama', 'mistral', 
+                'qwen', 'deepseek', 'open source', 'release', 'hugging face'
+            ])
+        ]
+        
+        if len(model_developments) < 2:
+            return ""  # Don't generate section if not enough model news
+        
+        # Select top 3-4 model developments
+        selected_models = model_developments[:4]
+        
+        model_section = "\n\n" + "="*60 + "\n"
+        model_section += "📋 **WEEKLY AI MODEL COMPILATION** 📋\n\n"
+        
+        for i, model in enumerate(selected_models, 1):
+            # Generate Unicode formatting for numbers and bold text
+            unicode_number = self.get_unicode_number(i)
+            title_parts = model['title'].split(' - ')[0] if ' - ' in model['title'] else model['title']
+            
+            model_section += f"{unicode_number}. 𝗚𝗲𝗻𝗲𝗿𝗮𝗹: {title_parts}\n"
+            
+            # Generate description based on content
+            if 'openai' in model['title'].lower():
+                description = "OpenAI continues advancing with new model capabilities and improvements."
+            elif 'claude' in model['title'].lower() or 'anthropic' in model['title'].lower():
+                description = "Anthropic's Claude family receives updates enhancing reasoning capabilities."
+            elif 'meta' in model['title'].lower() or 'llama' in model['title'].lower():
+                description = "Meta's open-source approach democratizes advanced AI capabilities."
+            elif 'google' in model['title'].lower() or 'gemini' in model['title'].lower():
+                description = "Google's Gemini models showcase multimodal AI advancements."
+            elif 'qwen' in model['title'].lower():
+                description = "Qwen models demonstrate strong multilingual and reasoning performance."
+            elif 'open source' in model['title'].lower() or 'hugging face' in model['summary'].lower():
+                description = "Open-source innovation drives accessibility in AI development."
+            else:
+                description = "New developments in AI model architecture and capabilities."
+            
+            model_section += f"{description}\n"
+            model_section += f"𝙇𝙞𝙣𝙠: {model['url']}\n\n"
+        
+        model_section += "These models represent the latest advances in AI capabilities and accessibility.\n"
+        model_section += "\n#artificialintelligence #machinelearning #llm #openai #anthropic #meta #google #opensource"
+        
+        return model_section
+    
+    def get_unicode_number(self, num: int) -> str:
+        """Convert number to Unicode bold"""
+        unicode_numbers = {
+            1: "𝟭", 2: "𝟮", 3: "𝟯", 4: "𝟰", 5: "𝟱", 
+            6: "𝟲", 7: "𝟳", 8: "𝟴", 9: "𝟵", 10: "𝟭𝟬"
+        }
+        return unicode_numbers.get(num, str(num))
+    
     def save_post(self, post_content: str):
         """Save the generated post to a file"""
         timestamp = datetime.now().strftime('%Y-%m-%d')
@@ -454,14 +607,16 @@ class AIMLPostGenerator:
         arxiv_papers = self.fetch_arxiv_papers()
         ai_news = self.fetch_ai_news()
         rss_news = self.fetch_tech_news_feeds()
+        model_releases = self.fetch_ai_model_releases()
         github_repos = self.fetch_github_trending()
         
         # Combine all developments
-        all_developments = arxiv_papers + ai_news + rss_news + github_repos
+        all_developments = arxiv_papers + ai_news + rss_news + model_releases + github_repos
         print(f"Found {len(all_developments)} total developments")
         print(f"  - ArXiv papers: {len(arxiv_papers)}")
         print(f"  - News (SerpAPI): {len(ai_news)}")
         print(f"  - News (RSS): {len(rss_news)}")
+        print(f"  - Model releases: {len(model_releases)}")
         print(f"  - GitHub repos: {len(github_repos)}")
         
         if not all_developments:
@@ -475,14 +630,20 @@ class AIMLPostGenerator:
         # Generate LinkedIn post
         linkedin_post = self.generate_linkedin_post(selected_developments)
         
+        # Generate technical model compilation
+        model_compilation = self.generate_model_compilation(all_developments)
+        
+        # Combine posts
+        final_post = linkedin_post + model_compilation
+        
         # Save the post
-        filename = self.save_post(linkedin_post)
+        filename = self.save_post(final_post)
         
         print(f"\n✅ Weekly post generated successfully!")
         print(f"📁 Saved to: {filename}")
         print("\n📋 Post preview:")
         print("-" * 50)
-        print(linkedin_post)
+        print(final_post)
         print("-" * 50)
 
 def main():
