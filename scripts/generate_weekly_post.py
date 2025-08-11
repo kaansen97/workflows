@@ -23,7 +23,7 @@ class AIMLPostGenerator:
         gemini_api_key = os.getenv('GEMINI_API_KEY')
         if gemini_api_key:
             genai.configure(api_key=gemini_api_key)
-            self.gemini_model = genai.GenerativeModel('gemini-pro')
+            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
         else:
             self.gemini_model = None
             
@@ -38,37 +38,46 @@ class AIMLPostGenerator:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days_back)
         
-        # Search for AI/ML papers
-        search_queries = [
-            "cat:cs.AI OR cat:cs.LG OR cat:cs.CV OR cat:cs.CL OR cat:cs.NE",
-            "artificial intelligence",
-            "machine learning",
-            "deep learning"
-        ]
-        
         papers = []
         try:
-            search = arxiv.Search(
-                query=search_queries[0],
-                max_results=50,
-                sort_by=arxiv.SortCriterion.SubmittedDate
-            )
+            # Use individual category searches to avoid URL encoding issues
+            categories = ["cs.AI", "cs.LG", "cs.CV", "cs.CL", "cs.NE"]
             
-            for result in search.results():
-                if result.published.replace(tzinfo=None) >= start_date:
-                    papers.append({
-                        'title': result.title,
-                        'summary': result.summary[:300] + "...",
-                        'url': result.entry_id,
-                        'published': result.published.strftime('%Y-%m-%d'),
-                        'authors': [author.name for author in result.authors[:3]],
-                        'source': 'arXiv',
-                        'type': 'paper'
-                    })
+            for category in categories:
+                search = arxiv.Search(
+                    query=f"cat:{category}",
+                    max_results=20,
+                    sort_by=arxiv.SortCriterion.SubmittedDate
+                )
+                
+                for result in search.results():
+                    if result.published.replace(tzinfo=None) >= start_date:
+                        papers.append({
+                            'title': result.title.strip(),
+                            'summary': result.summary.strip()[:300] + "...",
+                            'url': result.entry_id,
+                            'published': result.published.strftime('%Y-%m-%d'),
+                            'authors': [author.name for author in result.authors[:3]],
+                            'source': 'arXiv',
+                            'type': 'paper',
+                            'category': category
+                        })
+                        
+                if len(papers) >= 15:  # Limit total papers
+                    break
+                    
         except Exception as e:
             print(f"Error fetching arXiv papers: {e}")
             
-        return papers[:10]  # Limit to top 10
+        # Remove duplicates based on title
+        seen_titles = set()
+        unique_papers = []
+        for paper in papers:
+            if paper['title'] not in seen_titles:
+                seen_titles.add(paper['title'])
+                unique_papers.append(paper)
+                
+        return unique_papers[:10]  # Limit to top 10
     
     def fetch_ai_news(self) -> List[Dict[str, Any]]:
         """Fetch AI/ML news from various sources using web search"""
@@ -81,12 +90,14 @@ class AIMLPostGenerator:
             return news_items
             
         try:
-            # Search for recent AI/ML news
+            # More specific search queries for individual news items
             search_queries = [
-                "artificial intelligence news last week",
-                "machine learning breakthrough 2025",
-                "AI announcement new model",
-                "deep learning research latest"
+                '"OpenAI" OR "Anthropic" OR "Google AI" announcement last week',
+                '"new AI model" OR "AI breakthrough" OR "AI research" 2025',
+                '"ChatGPT" OR "Claude" OR "Gemini" update news',
+                '"Meta AI" OR "Microsoft AI" OR "Apple AI" announcement',
+                '"AI startup" funding OR acquisition news',
+                '"artificial intelligence" regulation OR policy news'
             ]
             
             for query in search_queries:
@@ -94,17 +105,37 @@ class AIMLPostGenerator:
                     "q": query,
                     "tbm": "nws",  # News search
                     "tbs": "qdr:w",  # Past week
+                    "num": 10,
                     "api_key": self.serpapi_key
                 })
                 
                 results = search.get_dict()
                 
                 if "news_results" in results:
-                    for item in results["news_results"][:5]:
+                    for item in results["news_results"]:
+                        title = item.get('title', '')
+                        link = item.get('link', '')
+                        
+                        # Filter out generic news aggregation pages
+                        if any(skip_word in title.lower() for skip_word in [
+                            'weekly update', 'news roundup', 'this week in', 
+                            'daily digest', 'news summary', 'weekly digest',
+                            'newsletter', 'roundup', 'weekly wrap'
+                        ]):
+                            continue
+                            
+                        # Filter out certain domains that are typically aggregators
+                        if any(domain in link for domain in [
+                            'marketingprofs.com/opinions',
+                            'solutionsreview.com/artificial-intelligence-news-for-the-week',
+                            'martech.org/the-latest-ai-powered-martech-news-and-releases'
+                        ]):
+                            continue
+                        
                         news_items.append({
-                            'title': item.get('title', ''),
+                            'title': title,
                             'summary': item.get('snippet', ''),
-                            'url': item.get('link', ''),
+                            'url': link,
                             'published': item.get('date', ''),
                             'source': item.get('source', ''),
                             'type': 'news'
@@ -113,7 +144,88 @@ class AIMLPostGenerator:
         except Exception as e:
             print(f"Error fetching news: {e}")
             
-        return news_items[:15]  # Limit results
+        # Remove duplicates based on title similarity
+        unique_news = []
+        seen_titles = set()
+        
+        for item in news_items:
+            title_lower = item['title'].lower()
+            # Simple deduplication based on title
+            if not any(seen_title in title_lower or title_lower in seen_title 
+                      for seen_title in seen_titles):
+                seen_titles.add(title_lower)
+                unique_news.append(item)
+                
+        return unique_news[:12]  # Limit results
+    
+    def fetch_tech_news_feeds(self) -> List[Dict[str, Any]]:
+        """Fetch AI/ML news from RSS feeds of tech publications"""
+        print("Fetching news from RSS feeds...")
+        
+        news_items = []
+        
+        # Tech news RSS feeds that often cover AI/ML
+        rss_feeds = [
+            {
+                'url': 'https://feeds.feedburner.com/venturebeat/SZYF',
+                'source': 'VentureBeat AI'
+            },
+            {
+                'url': 'https://techcrunch.com/category/artificial-intelligence/feed/',
+                'source': 'TechCrunch AI'
+            },
+            {
+                'url': 'https://www.theverge.com/ai-artificial-intelligence/rss/index.xml',
+                'source': 'The Verge AI'
+            },
+            {
+                'url': 'https://feeds.feedburner.com/oreilly/radar',
+                'source': "O'Reilly Radar"
+            }
+        ]
+        
+        for feed_info in rss_feeds:
+            try:
+                feed = feedparser.parse(feed_info['url'])
+                
+                for entry in feed.entries[:5]:  # Limit per feed
+                    # Check if published in the last week
+                    try:
+                        if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                            pub_date = datetime(*entry.published_parsed[:6])
+                        elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                            pub_date = datetime(*entry.updated_parsed[:6])
+                        else:
+                            pub_date = datetime.now() - timedelta(days=1)  # Assume recent
+                            
+                        if pub_date >= datetime.now() - timedelta(days=7):
+                            # Filter for AI/ML related content
+                            title_lower = entry.title.lower()
+                            summary_lower = getattr(entry, 'summary', '').lower()
+                            
+                            ai_keywords = ['ai', 'artificial intelligence', 'machine learning', 
+                                         'deep learning', 'neural network', 'chatgpt', 'openai',
+                                         'anthropic', 'claude', 'gemini', 'llm', 'generative']
+                            
+                            if any(keyword in title_lower or keyword in summary_lower 
+                                  for keyword in ai_keywords):
+                                news_items.append({
+                                    'title': entry.title,
+                                    'summary': getattr(entry, 'summary', '')[:300] + "...",
+                                    'url': entry.link,
+                                    'published': pub_date.strftime('%Y-%m-%d'),
+                                    'source': feed_info['source'],
+                                    'type': 'news'
+                                })
+                    except Exception as e:
+                        print(f"Error parsing entry from {feed_info['source']}: {e}")
+                        continue
+                        
+            except Exception as e:
+                print(f"Error fetching RSS feed {feed_info['source']}: {e}")
+                continue
+        
+        return news_items
     
     def fetch_github_trending(self) -> List[Dict[str, Any]]:
         """Fetch trending AI/ML repositories from GitHub"""
@@ -127,30 +239,42 @@ class AIMLPostGenerator:
                 'q': 'machine-learning OR artificial-intelligence OR deep-learning language:Python',
                 'sort': 'updated',
                 'order': 'desc',
-                'per_page': 10
+                'per_page': 15
             }
             
-            response = requests.get(url, params=params)
+            headers = {
+                'Accept': 'application/vnd.github.v3+json',
+                'User-Agent': 'AI-ML-Post-Generator'
+            }
+            
+            response = requests.get(url, params=params, headers=headers)
             if response.status_code == 200:
                 data = response.json()
-                for repo in data['items']:
-                    # Check if updated in the last week
-                    updated_at = datetime.strptime(repo['updated_at'], '%Y-%m-%dT%H:%M:%SZ')
-                    if updated_at >= datetime.now() - timedelta(days=7):
-                        repos.append({
-                            'title': f"{repo['full_name']} - {repo['description'][:100]}",
-                            'summary': repo['description'] or "No description available",
-                            'url': repo['html_url'],
-                            'published': repo['updated_at'][:10],
-                            'source': 'GitHub',
-                            'type': 'repository',
-                            'stars': repo['stargazers_count']
-                        })
+                
+                if 'items' in data and data['items']:
+                    for repo in data['items']:
+                        # Check if updated in the last week
+                        updated_at = datetime.strptime(repo['updated_at'], '%Y-%m-%dT%H:%M:%SZ')
+                        if updated_at >= datetime.now() - timedelta(days=7):
+                            repos.append({
+                                'title': f"{repo['full_name']} - {repo['description'][:100] if repo['description'] else 'No description'}",
+                                'summary': repo['description'] or "No description available",
+                                'url': repo['html_url'],
+                                'published': repo['updated_at'][:10],
+                                'source': 'GitHub',
+                                'type': 'repository',
+                                'stars': repo['stargazers_count'],
+                                'language': repo.get('language', 'Unknown')
+                            })
+                else:
+                    print("No repository items found in GitHub response")
+            else:
+                print(f"GitHub API error: {response.status_code} - {response.text}")
                         
         except Exception as e:
             print(f"Error fetching GitHub repos: {e}")
             
-        return repos
+        return repos[:8]  # Limit to top 8
     
     def analyze_and_select_top_developments(self, all_developments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Use AI to analyze and select the top 3-5 developments"""
@@ -184,21 +308,20 @@ class AIMLPostGenerator:
                 context += f"{i}. {dev['title']}\n   Source: {dev['source']}\n   Summary: {dev['summary'][:200]}...\n\n"
             
             prompt = f"""
-            You are an AI/ML expert curator. From the following developments, select the 3-5 most significant and impactful ones for a LinkedIn post targeting AI/ML professionals.Do not use generic news website where you can gather multiple news try to go search for individual news inside those sources 
-            for example there are two example websites 
-            https://www.marketingprofs.com/opinions/2025/53515/ai-update-august-1-2025-ai-news-and-views-from-the-past-week
-            https://martech.org/the-latest-ai-powered-martech-news-and-releases/
-            but instead adding them into linkedin go search contents inside of them and add individual impactful news in them 
+            You are an AI/ML expert curator. From the following developments, select the 3-5 most significant and impactful ones for a LinkedIn post targeting AI/ML professionals.
+            
             Consider:
             - Impact on the field
             - Novelty and innovation
             - Practical applications
             - Industry relevance
             - Diversity of topics
+            - Avoid generic news aggregation sources
 
             {context}
 
-            Return only the numbers (1-based) of the selected developments with detailed explanation, separated by commas.
+            Return only the numbers (1-based) of the selected developments, separated by commas.
+            Example: 1, 3, 7, 12
             """
             
             response = self.gemini_model.generate_content(prompt)
@@ -330,11 +453,16 @@ class AIMLPostGenerator:
         print("\n📊 Fetching data from sources...")
         arxiv_papers = self.fetch_arxiv_papers()
         ai_news = self.fetch_ai_news()
+        rss_news = self.fetch_tech_news_feeds()
         github_repos = self.fetch_github_trending()
         
         # Combine all developments
-        all_developments = arxiv_papers + ai_news + github_repos
+        all_developments = arxiv_papers + ai_news + rss_news + github_repos
         print(f"Found {len(all_developments)} total developments")
+        print(f"  - ArXiv papers: {len(arxiv_papers)}")
+        print(f"  - News (SerpAPI): {len(ai_news)}")
+        print(f"  - News (RSS): {len(rss_news)}")
+        print(f"  - GitHub repos: {len(github_repos)}")
         
         if not all_developments:
             print("❌ No developments found. Please check your API keys and internet connection.")
