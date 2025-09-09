@@ -16,7 +16,13 @@ from typing import List, Dict, Any
 import pytz
 import google.generativeai as genai
 from serpapi import GoogleSearch
-from huggingface_hub import HfApi
+
+try:
+    from huggingface_hub import HfApi
+    HF_AVAILABLE = True
+except ImportError:
+    print("Warning: huggingface_hub not available. HuggingFace model fetching will be skipped.")
+    HF_AVAILABLE = False
 
 class AIMLPostGenerator:
     def __init__(self):
