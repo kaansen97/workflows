@@ -719,6 +719,47 @@ class AIMLPostGenerator:
         model_section += "\n#artificialintelligence #machinelearning #llm #openai #anthropic #meta #google #opensource #huggingface #arxiv"
         
         return model_section
+
+        
+    def cleanup_old_posts(self, max_posts=30):
+        """Remove oldest posts when count exceeds max_posts"""
+        posts_dir = "posts"
+        
+        if not os.path.exists(posts_dir):
+            return
+        
+        # Get all post files
+        post_files = []
+        for filename in os.listdir(posts_dir):
+            if filename.startswith("ai-ml-weekly-") and filename.endswith(".md"):
+                filepath = os.path.join(posts_dir, filename)
+                try:
+                    # Extract date from filename
+                    date_str = filename.replace("ai-ml-weekly-", "").replace(".md", "")
+                    post_date = datetime.strptime(date_str, "%Y-%m-%d")
+                    post_files.append((filepath, post_date, filename))
+                except ValueError:
+                    # Skip files that don't match the expected format
+                    continue
+        
+        # Sort by date (oldest first)
+        post_files.sort(key=lambda x: x[1])
+        
+        # Remove oldest posts if we exceed the limit
+        if len(post_files) > max_posts:
+            posts_to_delete = post_files[:-max_posts]  # Keep only the newest max_posts
+            
+            for filepath, post_date, filename in posts_to_delete:
+                try:
+                    os.remove(filepath)
+                    print(f"🗑️  Deleted old post: {filename}")
+                except Exception as e:
+                    print(f"❌ Error deleting {filename}: {e}")
+            
+            print(f"📊 Cleanup complete: kept {max_posts} most recent posts, deleted {len(posts_to_delete)} old posts")
+        else:
+            print(f"📊 No cleanup needed: {len(post_files)} posts (limit: {max_posts})")
+
     
     def save_post(self, post_content: str):
         """Save the generated post to a file"""
