@@ -16,6 +16,7 @@ from typing import List, Dict, Any
 import pytz
 import google.generativeai as genai
 from serpapi import GoogleSearch
+from huggingface_hub import HfApi
 
 class AIMLPostGenerator:
     def __init__(self):
@@ -40,7 +41,6 @@ class AIMLPostGenerator:
         
         papers = []
         try:
-            # Fetch recent papers across all categories and filter for AI/ML
             search = arxiv.Search(
                 query="*",  # Get all recent papers
                 max_results=200,  # Get more papers to filter from
@@ -59,7 +59,7 @@ class AIMLPostGenerator:
             
             count = 0
             for result in search.results():
-                if count >= 15:  # Limit total papers
+                if count >= 15:  
                     break
                     
                 # Check if published in the last week
@@ -90,7 +90,6 @@ class AIMLPostGenerator:
                         
         except Exception as e:
             print(f"Error fetching arXiv papers: {e}")
-            # Fallback: try with a simple query
             try:
                 print("Trying fallback approach...")
                 search = arxiv.Search(
@@ -125,8 +124,8 @@ class AIMLPostGenerator:
                 seen_titles.add(paper['title'])
                 unique_papers.append(paper)
                 
-        return unique_papers[:10]  # Limit to top 10
-    
+        return unique_papers[:10]  
+        
     def fetch_ai_news(self) -> List[Dict[str, Any]]:
         """Fetch AI/ML news from various sources using web search"""
         print("Fetching AI/ML news...")
@@ -151,8 +150,8 @@ class AIMLPostGenerator:
             for query in search_queries:
                 search = GoogleSearch({
                     "q": query,
-                    "tbm": "nws",  # News search
-                    "tbs": "qdr:w",  # Past week
+                    "tbm": "nws",  
+                    "tbs": "qdr:w",  
                     "num": 10,
                     "api_key": self.serpapi_key
                 })
@@ -172,7 +171,6 @@ class AIMLPostGenerator:
                         ]):
                             continue
                             
-                        # Filter out certain domains that are typically aggregators
                         if any(domain in link for domain in [
                             'marketingprofs.com/opinions',
                             'solutionsreview.com/artificial-intelligence-news-for-the-week',
@@ -204,7 +202,7 @@ class AIMLPostGenerator:
                 seen_titles.add(title_lower)
                 unique_news.append(item)
                 
-        return unique_news[:12]  # Limit results
+        return unique_news[:12]  
     
     def fetch_tech_news_feeds(self) -> List[Dict[str, Any]]:
         """Fetch AI/ML news from RSS feeds of tech publications"""
@@ -236,8 +234,8 @@ class AIMLPostGenerator:
             try:
                 feed = feedparser.parse(feed_info['url'])
                 
-                for entry in feed.entries[:5]:  # Limit per feed
-                    # Check if published in the last week
+                for entry in feed.entries[:5]:  
+                    
                     try:
                         if hasattr(entry, 'published_parsed') and entry.published_parsed:
                             pub_date = datetime(*entry.published_parsed[:6])
@@ -286,7 +284,7 @@ class AIMLPostGenerator:
             return model_releases
             
         try:
-            # Specific search queries for AI model releases
+
             model_queries = [
                 '"new model release" OR "model announcement" site:huggingface.co',
                 '"OpenAI" "new model" OR "model release" 2025',
@@ -302,8 +300,8 @@ class AIMLPostGenerator:
                 try:
                     search = GoogleSearch({
                         "q": query,
-                        "tbm": "nws",  # News search
-                        "tbs": "qdr:w",  # Past week
+                        "tbm": "nws",  
+                        "tbs": "qdr:w",  
                         "num": 8,
                         "api_key": self.serpapi_key
                     })
@@ -315,7 +313,6 @@ class AIMLPostGenerator:
                             title = item.get('title', '')
                             link = item.get('link', '')
                             
-                            # Filter for model-specific keywords
                             model_keywords = [
                                 'model', 'llm', 'gpt', 'claude', 'gemini', 'llama', 
                                 'mistral', 'qwen', 'deepseek', 'release', 'announcement',
@@ -351,6 +348,112 @@ class AIMLPostGenerator:
                 unique_models.append(item)
                 
         return unique_models[:8]  # Limit results
+
+    def fetch_huggingface_models(self) -> List[Dict[str, Any]]:
+        """Fetch recent AI model releases from HuggingFace"""
+        print("Fetching recent models from HuggingFace...")
+        
+        models = []
+        try:
+            api = HfApi()
+            
+            # Get recently updated models
+            recent_models = api.list_models(
+                sort="lastModified",
+                direction=-1,
+                limit=50,
+                filter=["text-generation", "text2text-generation", "conversational"]
+            )
+            
+            one_week_ago = datetime.now() - timedelta(days=7)
+            
+            for model in recent_models:
+                try:
+                    # Check if model was updated in the last week
+                    if hasattr(model, 'lastModified') and model.lastModified:
+                        last_modified = datetime.fromisoformat(model.lastModified.replace('Z', '+00:00'))
+                        if last_modified.replace(tzinfo=None) > one_week_ago:
+                            # Get model details
+                            model_info = api.model_info(model.modelId)
+                            
+                            # Create a description based on model info
+                            description = f"New AI model release on HuggingFace: {model.modelId}"
+                            if hasattr(model_info, 'downloads') and model_info.downloads > 1000:
+                                description += f" (Popular model with {model_info.downloads} downloads)"
+                            
+                            models.append({
+                                'title': f"HuggingFace Model Release: {model.modelId}",
+                                'summary': description,
+                                'url': f"https://huggingface.co/{model.modelId}",
+                                'published': model.lastModified,
+                                'source': 'HuggingFace',
+                                'type': 'model_release'
+                            })
+                            
+                except Exception as model_error:
+                    print(f"Error processing model {model.modelId}: {model_error}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Error fetching HuggingFace models: {e}")
+            
+        return models[:10]  # Limit to top 10 recent models
+
+    def fetch_arxiv_ai_models(self, days_back=7) -> List[Dict[str, Any]]:
+        """Fetch recent arXiv papers specifically about AI models"""
+        print("Fetching AI model papers from arXiv...")
+        
+        papers = []
+        try:
+            # Search for AI model-related papers
+            model_queries = [
+                "cat:cs.AI AND (language model OR LLM OR transformer)",
+                "cat:cs.CL AND (model OR architecture)",
+                "cat:cs.LG AND (neural network OR deep learning model)",
+                "cat:stat.ML AND (AI model OR machine learning model)"
+            ]
+            
+            cutoff_date = datetime.now() - timedelta(days=days_back)
+            
+            for query in model_queries:
+                try:
+                    search = arxiv.Search(
+                        query=query,
+                        max_results=20,
+                        sort_by=arxiv.SortCriterion.SubmittedDate
+                    )
+                    
+                    for result in search.results():
+                        if result.published.replace(tzinfo=None) > cutoff_date:
+                            papers.append({
+                                'title': result.title,
+                                'summary': result.summary[:200] + "..." if len(result.summary) > 200 else result.summary,
+                                'url': result.entry_id,
+                                'published': result.published.isoformat(),
+                                'authors': ', '.join([author.name for author in result.authors[:3]]),
+                                'type': 'arxiv_model_paper',
+                                'source': 'arXiv'
+                            })
+                            
+                except Exception as search_error:
+                    print(f"Error with arXiv query '{query}': {search_error}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Error fetching arXiv AI model papers: {e}")
+            
+        # Remove duplicates and limit results
+        unique_papers = []
+        seen_titles = set()
+        
+        for paper in papers:
+            title_lower = paper['title'].lower()
+            if not any(seen_title in title_lower or title_lower in seen_title 
+                      for seen_title in seen_titles):
+                seen_titles.add(title_lower)
+                unique_papers.append(paper)
+                
+        return unique_papers[:8]
     
     def fetch_github_trending(self) -> List[Dict[str, Any]]:
         """Fetch trending AI/ML repositories from GitHub"""
@@ -558,60 +661,58 @@ class AIMLPostGenerator:
         # Filter for model releases and relevant technical developments
         model_developments = [
             dev for dev in all_developments 
-            if dev.get('type') == 'model_release' or 
-            any(keyword in dev.get('title', '').lower() for keyword in [
-                'model', 'llm', 'gpt', 'claude', 'gemini', 'llama', 'mistral', 
-                'qwen', 'deepseek', 'open source', 'release', 'hugging face'
-            ])
+            if (dev.get('type') in ['model_release', 'arxiv_model_paper'] or 
+                any(keyword in dev.get('title', '').lower() for keyword in [
+                    'model', 'llm', 'gpt', 'claude', 'gemini', 'llama', 'mistral', 
+                    'qwen', 'deepseek', 'open source', 'release', 'hugging face',
+                    'transformer', 'neural network', 'architecture'
+                ]))
         ]
         
         if len(model_developments) < 2:
-            return ""  # Don't generate section if not enough model news
+            return "" 
         
-        # Select top 3-4 model developments
         selected_models = model_developments[:4]
         
         model_section = "\n\n" + "="*60 + "\n"
-        model_section += "📋 **WEEKLY AI MODEL COMPILATION** 📋\n\n"
+        model_section += "**WEEKLY AI MODEL COMPILATION**\n\n"
         
         for i, model in enumerate(selected_models, 1):
-            # Generate Unicode formatting for numbers and bold text
-            unicode_number = self.get_unicode_number(i)
             title_parts = model['title'].split(' - ')[0] if ' - ' in model['title'] else model['title']
             
-            model_section += f"{unicode_number}. 𝗚𝗲𝗻𝗲𝗿𝗮𝗹: {title_parts}\n"
+            model_section += f"{i}. General: {title_parts}\n"
             
-            # Generate description based on content
-            if 'openai' in model['title'].lower():
-                description = "OpenAI continues advancing with new model capabilities and improvements."
+            # Generate description based on content and source
+            if model.get('source') == 'HuggingFace':
+                description = "New model release on HuggingFace platform demonstrates continued innovation in open-source AI development."
+            elif model.get('source') == 'arXiv':
+                description = "Recent research paper presents novel approaches and methodologies in AI model development."
+            elif 'openai' in model['title'].lower():
+                description = "OpenAI continues advancing AI capabilities with new model improvements and features."
             elif 'claude' in model['title'].lower() or 'anthropic' in model['title'].lower():
-                description = "Anthropic's Claude family receives updates enhancing reasoning capabilities."
+                description = "Anthropic's Claude family receives updates that enhance reasoning and safety capabilities."
             elif 'meta' in model['title'].lower() or 'llama' in model['title'].lower():
-                description = "Meta's open-source approach democratizes advanced AI capabilities."
+                description = "Meta's commitment to open-source AI continues to democratize advanced model capabilities."
             elif 'google' in model['title'].lower() or 'gemini' in model['title'].lower():
-                description = "Google's Gemini models showcase multimodal AI advancements."
+                description = "Google's Gemini models showcase significant progress in multimodal AI capabilities."
             elif 'qwen' in model['title'].lower():
-                description = "Qwen models demonstrate strong multilingual and reasoning performance."
+                description = "Qwen models demonstrate impressive performance in multilingual understanding and reasoning tasks."
+            elif 'mistral' in model['title'].lower():
+                description = "Mistral AI continues to deliver high-performance models with efficient architectures."
             elif 'open source' in model['title'].lower() or 'hugging face' in model['summary'].lower():
-                description = "Open-source innovation drives accessibility in AI development."
+                description = "Open-source innovation continues to drive accessibility and transparency in AI model development."
             else:
-                description = "New developments in AI model architecture and capabilities."
+                description = "Significant advancement in AI model architecture and performance capabilities."
             
             model_section += f"{description}\n"
-            model_section += f"𝙇𝙞𝙣𝙠: {model['url']}\n\n"
+            model_section += f"Link: {model['url']}\n\n"
         
-        model_section += "These models represent the latest advances in AI capabilities and accessibility.\n"
-        model_section += "\n#artificialintelligence #machinelearning #llm #openai #anthropic #meta #google #opensource"
+        model_section += "These developments represent the latest advances in artificial intelligence model capabilities and accessibility. "
+        model_section += "The combination of research breakthroughs, commercial releases, and open-source contributions "
+        model_section += "continues to push the boundaries of what AI models can achieve.\n"
+        model_section += "\n#artificialintelligence #machinelearning #llm #openai #anthropic #meta #google #opensource #huggingface #arxiv"
         
         return model_section
-    
-    def get_unicode_number(self, num: int) -> str:
-        """Convert number to Unicode bold"""
-        unicode_numbers = {
-            1: "𝟭", 2: "𝟮", 3: "𝟯", 4: "𝟰", 5: "𝟱", 
-            6: "𝟲", 7: "𝟳", 8: "𝟴", 9: "𝟵", 10: "𝟭𝟬"
-        }
-        return unicode_numbers.get(num, str(num))
     
     def save_post(self, post_content: str):
         """Save the generated post to a file"""
@@ -638,18 +739,23 @@ class AIMLPostGenerator:
         # Fetch developments from various sources
         print("\n📊 Fetching data from sources...")
         arxiv_papers = self.fetch_arxiv_papers()
+        arxiv_model_papers = self.fetch_arxiv_ai_models()
         ai_news = self.fetch_ai_news()
         rss_news = self.fetch_tech_news_feeds()
         model_releases = self.fetch_ai_model_releases()
+        huggingface_models = self.fetch_huggingface_models()
         github_repos = self.fetch_github_trending()
         
         # Combine all developments
-        all_developments = arxiv_papers + ai_news + rss_news + model_releases + github_repos
+        all_developments = (arxiv_papers + arxiv_model_papers + ai_news + 
+                          rss_news + model_releases + huggingface_models + github_repos)
         print(f"Found {len(all_developments)} total developments")
         print(f"  - ArXiv papers: {len(arxiv_papers)}")
+        print(f"  - ArXiv AI model papers: {len(arxiv_model_papers)}")
         print(f"  - News (SerpAPI): {len(ai_news)}")
         print(f"  - News (RSS): {len(rss_news)}")
         print(f"  - Model releases: {len(model_releases)}")
+        print(f"  - HuggingFace models: {len(huggingface_models)}")
         print(f"  - GitHub repos: {len(github_repos)}")
         
         if not all_developments:
