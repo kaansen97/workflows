@@ -591,7 +591,7 @@ class AIMLPostGenerator:
             
             for i, dev in enumerate(selected_developments, 1):
                 post += f"{i}. {dev['title']}\n"
-                post += f"   💡 {dev['summary'][:150]}...\n"
+                post += f"   {i} {dev['summary'][:150]}...\n"
                 post += f"   🔗 {dev['url']}\n\n"
             
             post += "#AI #MachineLearning #DeepLearning #ArtificialIntelligence #Tech #Innovation"
