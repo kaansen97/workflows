@@ -1,0 +1,48 @@
+name: Monthly Post Archive Cleanup
+
+on:
+  schedule:
+    # Run at ~09:19 UTC on the 1st of every month (avoid ':00' — GitHub often drops those)
+    - cron: '19 9 1 * *'
+  workflow_dispatch: # Allow manual trigger
+    inputs:
+      keep_days:
+        description: 'Delete posts older than this many days'
+        required: false
+        default: '60'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ github.token }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Clean up old posts
+      env:
+        KEEP_DAYS: ${{ github.event.inputs.keep_days || '60' }}
+      run: |
+        python scripts/cleanup_posts.py
+
+    - name: Commit and push changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add -A posts/
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Monthly cleanup: prune old posts ($(date +%Y-%m-%d))"
+          git push
+        fi

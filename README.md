@@ -15,10 +15,13 @@ Automated GitHub Actions workflow that generates weekly LinkedIn posts summarizi
 ```
 workflows/
 ├── .github/workflows/
-│   └── weekly-ai-ml-post.yml    # GitHub Actions workflow
+│   ├── weekly-ai-ml-post.yml    # Weekly post generation (Mondays)
+│   └── monthly-cleanup.yml      # Monthly archive cleanup (1st of month)
 ├── scripts/
-│   └── generate_weekly_post.py  # Main post generation script  
-├── posts/                       # Generated posts storage
+│   ├── generate_weekly_post.py  # Main post generation script
+│   └── cleanup_posts.py         # Deletes posts older than the retention window
+├── posts/                       # Generated posts (ai-ml-weekly-YYYY-MM-DD.md)
+│   └── .seen.json               # Dedup record of already-featured URLs
 ├── requirements.txt             # Python dependencies
 ├── config.py                   # Configuration settings
 ├── setup.py                    # Local testing setup
@@ -84,9 +87,38 @@ python setup.py
    - cs.CL (Computational Linguistics)
    - cs.NE (Neural and Evolutionary Computing)
 
-2. **AI News**: Searches for recent AI/ML news articles and announcements
+2. **AI News (SerpAPI)**: Searches for recent AI/ML news articles and announcements
 
-3. **GitHub Trending**: Finds popular AI/ML repositories updated in the past week
+3. **RSS Feeds**: 13 tech-press, company, and research feeds — VentureBeat, TechCrunch, The Verge, WIRED, MIT Technology Review, O'Reilly Radar, AI News, plus lab blogs (OpenAI, Google DeepMind, Berkeley BAIR, Hugging Face) and research digests (MarkTechPost, Synced). No API keys required.
+
+4. **Hacker News**: Popular AI/ML stories (>40 points) from the past week via the free Algolia API. No API key required.
+
+5. **HuggingFace**: Recently updated text-generation models.
+
+6. **GitHub Trending**: Finds popular AI/ML repositories updated in the past week.
+
+### Deduplication (no repeated stories)
+
+Every URL that has been featured in a post is recorded in `posts/.seen.json`. On each
+run, any development whose URL already appears there is dropped **before** selection, so
+the same story never appears in more than one weekly post. Entries older than 180 days are
+pruned automatically so the store stays small. Items are also de-duplicated within a single
+run by normalized URL.
+
+### Post storage & cleanup
+
+- Posts are written flat to `posts/ai-ml-weekly-YYYY-MM-DD.md`.
+- `scripts/cleanup_posts.py` deletes posts older than a retention window (default 60 days
+  ≈ 2 months / ~8 posts). It runs automatically on the 1st of each month via
+  `.github/workflows/monthly-cleanup.yml`, and can be run manually:
+
+  ```bash
+  python scripts/cleanup_posts.py --keep-days 60   # delete posts older than 60 days
+  python scripts/cleanup_posts.py --dry-run        # preview without deleting
+  ```
+
+  The dedup record (`.seen.json`) is never deleted, so already-featured stories stay
+  suppressed even after their posts are pruned.
 
 ### AI-Powered Curation
 
@@ -135,7 +167,7 @@ Edit the `generate_linkedin_post()` method in `generate_weekly_post.py` to:
 Modify the cron expression in `.github/workflows/weekly-ai-ml-post.yml`:
 ```yaml
 schedule:
-  - cron: '0 8 * * 1'  # Every Monday at 08:00 UTC
+  - cron: '19 8 * * 1'  # Every Monday ~08:19 UTC (avoid ':00' — GitHub often drops those)
 ```
 
 ## 📝 Generated Post Example

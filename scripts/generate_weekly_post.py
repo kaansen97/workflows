@@ -7,15 +7,52 @@ a LinkedIn post summarizing 3-5 major developments from the past week.
 """
 
 import os
+import sys
 import json
 import requests
 import feedparser
 import arxiv
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
+from urllib.parse import urlparse
 import pytz
 import google.generativeai as genai
 from serpapi import GoogleSearch
+
+# Ensure emoji/status output doesn't crash on non-UTF-8 consoles (e.g. Windows cp1252).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
+# Directory where generated posts live, organized into monthly subfolders.
+POSTS_DIR = "posts"
+# Persistent record of every URL that has already been featured, so the same
+# story is never posted twice. Entries older than SEEN_RETENTION_DAYS are pruned.
+SEEN_STORE_PATH = os.path.join(POSTS_DIR, ".seen.json")
+SEEN_RETENTION_DAYS = 180
+
+
+def normalize_url(url: str) -> str:
+    """Canonicalize a URL for deduplication.
+
+    Drops scheme, query string, fragment, a leading ``www.`` and any trailing
+    slash so that cosmetic variants of the same link collapse to one key.
+    """
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url.strip().lower())
+        netloc = parsed.netloc
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        path = parsed.path.rstrip("/")
+        if netloc:
+            return f"{netloc}{path}"
+        # Relative or malformed URL: fall back to the cleaned raw string.
+        return url.strip().lower().rstrip("/")
+    except Exception:
+        return url.strip().lower().rstrip("/")
 
 try:
     from huggingface_hub import HfApi
@@ -36,7 +73,72 @@ class AIMLPostGenerator:
             
         self.serpapi_key = os.getenv('SERPAPI_KEY')
         self.developments = []
-        
+        # Map of normalized_url -> ISO date it was first featured.
+        self.seen_urls = self._load_seen_store()
+
+    def _load_seen_store(self) -> Dict[str, str]:
+        """Load the persistent record of already-featured URLs."""
+        if not os.path.exists(SEEN_STORE_PATH):
+            return {}
+        try:
+            with open(SEEN_STORE_PATH, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception as e:
+            print(f"Warning: could not read seen-store ({e}); starting fresh.")
+        return {}
+
+    def _save_seen_store(self):
+        """Persist the seen-URL record, pruning entries older than the window."""
+        cutoff = datetime.now() - timedelta(days=SEEN_RETENTION_DAYS)
+        pruned = {}
+        for url, date_str in self.seen_urls.items():
+            try:
+                seen_date = datetime.fromisoformat(date_str)
+            except (ValueError, TypeError):
+                # Keep entries with an unparseable date rather than lose them.
+                pruned[url] = date_str
+                continue
+            if seen_date >= cutoff:
+                pruned[url] = date_str
+        self.seen_urls = pruned
+        os.makedirs(POSTS_DIR, exist_ok=True)
+        try:
+            with open(SEEN_STORE_PATH, 'w', encoding='utf-8') as f:
+                json.dump(self.seen_urls, f, indent=2, sort_keys=True)
+        except Exception as e:
+            print(f"Warning: could not write seen-store ({e}).")
+
+    def filter_already_seen(self, developments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Drop developments whose URL has already been featured in a past post,
+        and de-duplicate within this run by normalized URL."""
+        fresh = []
+        seen_this_run = set()
+        skipped = 0
+        for dev in developments:
+            key = normalize_url(dev.get('url', ''))
+            if not key:
+                fresh.append(dev)
+                continue
+            if key in self.seen_urls or key in seen_this_run:
+                skipped += 1
+                continue
+            seen_this_run.add(key)
+            fresh.append(dev)
+        if skipped:
+            print(f"🔁 Skipped {skipped} already-seen items (URL dedup).")
+        return fresh
+
+    def record_featured(self, developments: List[Dict[str, Any]]):
+        """Mark the given developments as featured so they never reappear."""
+        today = datetime.now().strftime('%Y-%m-%d')
+        for dev in developments:
+            key = normalize_url(dev.get('url', ''))
+            if key:
+                self.seen_urls.setdefault(key, today)
+        self._save_seen_store()
+
     def fetch_arxiv_papers(self, days_back=7) -> List[Dict[str, Any]]:
         """Fetch recent AI/ML papers from arXiv"""
         print("Fetching papers from arXiv...")
@@ -216,24 +318,25 @@ class AIMLPostGenerator:
         
         news_items = []
         
-        # Tech news RSS feeds that often cover AI/ML
+        # Tech news + research RSS feeds that often cover AI/ML.
+        # All are free and require no API keys.
         rss_feeds = [
-            {
-                'url': 'https://feeds.feedburner.com/venturebeat/SZYF',
-                'source': 'VentureBeat AI'
-            },
-            {
-                'url': 'https://techcrunch.com/category/artificial-intelligence/feed/',
-                'source': 'TechCrunch AI'
-            },
-            {
-                'url': 'https://www.theverge.com/ai-artificial-intelligence/rss/index.xml',
-                'source': 'The Verge AI'
-            },
-            {
-                'url': 'https://feeds.feedburner.com/oreilly/radar',
-                'source': "O'Reilly Radar"
-            }
+            # General tech press
+            {'url': 'https://feeds.feedburner.com/venturebeat/SZYF', 'source': 'VentureBeat AI'},
+            {'url': 'https://techcrunch.com/category/artificial-intelligence/feed/', 'source': 'TechCrunch AI'},
+            {'url': 'https://www.theverge.com/ai-artificial-intelligence/rss/index.xml', 'source': 'The Verge AI'},
+            {'url': 'https://feeds.feedburner.com/oreilly/radar', 'source': "O'Reilly Radar"},
+            {'url': 'https://www.wired.com/feed/tag/ai/latest/rss', 'source': 'WIRED AI'},
+            {'url': 'https://www.technologyreview.com/topic/artificial-intelligence/feed', 'source': 'MIT Technology Review'},
+            {'url': 'https://www.artificialintelligence-news.com/feed/', 'source': 'AI News'},
+            # Company / lab blogs
+            {'url': 'https://openai.com/blog/rss.xml', 'source': 'OpenAI Blog'},
+            {'url': 'https://deepmind.google/blog/rss.xml', 'source': 'Google DeepMind'},
+            {'url': 'https://bair.berkeley.edu/blog/feed.xml', 'source': 'Berkeley BAIR'},
+            {'url': 'https://huggingface.co/blog/feed.xml', 'source': 'Hugging Face Blog'},
+            # Research / community
+            {'url': 'https://www.marktechpost.com/feed/', 'source': 'MarkTechPost'},
+            {'url': 'https://syncedreview.com/feed/', 'source': 'Synced'},
         ]
         
         for feed_info in rss_feeds:
@@ -279,6 +382,61 @@ class AIMLPostGenerator:
         
         return news_items
     
+    def fetch_hacker_news(self, days_back=7, min_points=40) -> List[Dict[str, Any]]:
+        """Fetch popular AI/ML stories from Hacker News (free Algolia API)."""
+        print("Fetching stories from Hacker News...")
+
+        stories = []
+        cutoff_ts = int((datetime.now() - timedelta(days=days_back)).timestamp())
+        queries = ['AI', 'LLM', 'machine learning', 'neural network', 'open source model']
+
+        for query in queries:
+            try:
+                response = requests.get(
+                    "https://hn.algolia.com/api/v1/search",
+                    params={
+                        'query': query,
+                        'tags': 'story',
+                        'numericFilters': f'created_at_i>{cutoff_ts},points>{min_points}',
+                        'hitsPerPage': 15,
+                    },
+                    headers={'User-Agent': 'AI-ML-Post-Generator'},
+                    timeout=20,
+                )
+                if response.status_code != 200:
+                    print(f"Hacker News API error for '{query}': {response.status_code}")
+                    continue
+
+                for hit in response.json().get('hits', []):
+                    url = hit.get('url') or f"https://news.ycombinator.com/item?id={hit.get('objectID')}"
+                    title = hit.get('title', '')
+                    if not title:
+                        continue
+                    created = hit.get('created_at', '')[:10]
+                    points = hit.get('points', 0)
+                    comments = hit.get('num_comments', 0)
+                    stories.append({
+                        'title': title,
+                        'summary': f"Trending on Hacker News with {points} points and {comments} comments.",
+                        'url': url,
+                        'published': created,
+                        'source': 'Hacker News',
+                        'type': 'news',
+                    })
+            except Exception as e:
+                print(f"Error fetching Hacker News for '{query}': {e}")
+                continue
+
+        # De-duplicate by title within this source.
+        unique = []
+        seen_titles = set()
+        for item in stories:
+            key = item['title'].lower()
+            if key not in seen_titles:
+                seen_titles.add(key)
+                unique.append(item)
+        return unique[:12]
+
     def fetch_ai_model_releases(self) -> List[Dict[str, Any]]:
         """Fetch recent AI model releases and announcements"""
         print("Fetching AI model releases...")
@@ -591,7 +749,7 @@ class AIMLPostGenerator:
             
             for i, dev in enumerate(selected_developments, 1):
                 post += f"{i}. {dev['title']}\n"
-                post += f"   {i} {dev['summary'][:150]}...\n"
+                post += f"   {dev['summary'][:150]}...\n"
                 post += f"   🔗 {dev['url']}\n\n"
             
             post += "#AI #MachineLearning #DeepLearning #ArtificialIntelligence #Tech #Innovation"
@@ -721,53 +879,12 @@ class AIMLPostGenerator:
         return model_section
 
         
-    def cleanup_old_posts(self, max_posts=30):
-        """Remove oldest posts when count exceeds max_posts"""
-        posts_dir = "posts"
-        
-        if not os.path.exists(posts_dir):
-            return
-        
-        # Get all post files
-        post_files = []
-        for filename in os.listdir(posts_dir):
-            if filename.startswith("ai-ml-weekly-") and filename.endswith(".md"):
-                filepath = os.path.join(posts_dir, filename)
-                try:
-                    # Extract date from filename
-                    date_str = filename.replace("ai-ml-weekly-", "").replace(".md", "")
-                    post_date = datetime.strptime(date_str, "%Y-%m-%d")
-                    post_files.append((filepath, post_date, filename))
-                except ValueError:
-                    # Skip files that don't match the expected format
-                    continue
-        
-        # Sort by date (oldest first)
-        post_files.sort(key=lambda x: x[1])
-        
-        # Remove oldest posts if we exceed the limit
-        if len(post_files) > max_posts:
-            posts_to_delete = post_files[:-max_posts]  # Keep only the newest max_posts
-            
-            for filepath, post_date, filename in posts_to_delete:
-                try:
-                    os.remove(filepath)
-                    print(f"🗑️  Deleted old post: {filename}")
-                except Exception as e:
-                    print(f"❌ Error deleting {filename}: {e}")
-            
-            print(f"📊 Cleanup complete: kept {max_posts} most recent posts, deleted {len(posts_to_delete)} old posts")
-        else:
-            print(f"📊 No cleanup needed: {len(post_files)} posts (limit: {max_posts})")
-
-    
     def save_post(self, post_content: str):
-        """Save the generated post to a file"""
+        """Save the generated post to posts/ai-ml-weekly-YYYY-MM-DD.md."""
         timestamp = datetime.now().strftime('%Y-%m-%d')
-        filename = f"posts/ai-ml-weekly-{timestamp}.md"
-        
-        os.makedirs('posts', exist_ok=True)
-        
+        os.makedirs(POSTS_DIR, exist_ok=True)
+        filename = os.path.join(POSTS_DIR, f"ai-ml-weekly-{timestamp}.md")
+
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(f"# AI/ML Weekly Post - {timestamp}\n\n")
             f.write("Generated by AI/ML LinkedIn Post Generator\n\n")
@@ -789,26 +906,38 @@ class AIMLPostGenerator:
         arxiv_model_papers = self.fetch_arxiv_ai_models()
         ai_news = self.fetch_ai_news()
         rss_news = self.fetch_tech_news_feeds()
+        hacker_news = self.fetch_hacker_news()
         model_releases = self.fetch_ai_model_releases()
         huggingface_models = self.fetch_huggingface_models()
         github_repos = self.fetch_github_trending()
-        
+
         # Combine all developments
-        all_developments = (arxiv_papers + arxiv_model_papers + ai_news + 
-                          rss_news + model_releases + huggingface_models + github_repos)
+        all_developments = (arxiv_papers + arxiv_model_papers + ai_news +
+                          rss_news + hacker_news + model_releases +
+                          huggingface_models + github_repos)
         print(f"Found {len(all_developments)} total developments")
         print(f"  - ArXiv papers: {len(arxiv_papers)}")
         print(f"  - ArXiv AI model papers: {len(arxiv_model_papers)}")
         print(f"  - News (SerpAPI): {len(ai_news)}")
         print(f"  - News (RSS): {len(rss_news)}")
+        print(f"  - Hacker News: {len(hacker_news)}")
         print(f"  - Model releases: {len(model_releases)}")
         print(f"  - HuggingFace models: {len(huggingface_models)}")
         print(f"  - GitHub repos: {len(github_repos)}")
-        
+
         if not all_developments:
             print("❌ No developments found. Please check your API keys and internet connection.")
             return
-        
+
+        # Drop anything already featured in a previous post (cross-run dedup)
+        # and de-duplicate within this run by URL.
+        all_developments = self.filter_already_seen(all_developments)
+        print(f"🆕 {len(all_developments)} developments remain after dedup")
+
+        if not all_developments:
+            print("❌ No new developments this week after removing already-seen items.")
+            return
+
         # Select top developments
         selected_developments = self.analyze_and_select_top_developments(all_developments)
         print(f"📝 Selected {len(selected_developments)} top developments")
@@ -821,7 +950,17 @@ class AIMLPostGenerator:
         
         # Combine posts
         final_post = linkedin_post + model_compilation
-        
+
+        # Record every development that actually appears in the output so it is
+        # never featured again. We match on the URL appearing in the final text,
+        # which covers both the curated list and the model compilation.
+        featured = [dev for dev in all_developments
+                    if dev.get('url') and dev['url'] in final_post]
+        # Always include the explicitly selected ones (the AI may rephrase URLs).
+        featured.extend(selected_developments)
+        self.record_featured(featured)
+        print(f"🧠 Recorded {len(self.seen_urls)} URLs in the seen-store")
+
         # Save the post
         filename = self.save_post(final_post)
         
