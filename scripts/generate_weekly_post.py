@@ -745,7 +745,7 @@ class AIMLPostGenerator:
         if not self.gemini_model:
             # Fallback manual post generation
             post = f"🚀 AI/ML Weekly Update - {current_date}\n\n"
-            post += "Here are the top AI/ML developments from this week:\n\n"
+            post += "Here are the top AI/ML developments from last week:\n\n"
             
             for i, dev in enumerate(selected_developments, 1):
                 post += f"{i}. {dev['title']}\n"
