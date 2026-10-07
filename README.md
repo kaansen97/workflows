@@ -122,7 +122,7 @@ run by normalized URL.
 
 ### AI-Powered Curation
 
-The script uses Google's Gemini Pro model to:
+The script uses Google Gemini (default `gemini-3.8-flash`, override with the `GEMINI_MODEL` env var) via the `google-genai` SDK to:
 - Analyze all collected developments
 - Select the 3-5 most significant and impactful ones
 - Generate engaging LinkedIn post content with professional commentary
@@ -228,7 +228,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 🙏 Acknowledgments
 
 - [arXiv](https://arxiv.org/) for providing access to research papers
-- [Google AI](https://ai.google.dev/) for Gemini Pro models
+- [Google AI](https://ai.google.dev/) for Gemini models
 - [SerpAPI](https://serpapi.com/) for news search capabilities
 - [GitHub](https://github.com/) for hosting and automation infrastructure
 

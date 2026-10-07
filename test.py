@@ -14,7 +14,7 @@ def test_imports():
     
     packages = {
         'requests': 'requests',
-        'google-generativeai': 'google.generativeai', 
+        'google-genai': 'google.genai',
         'feedparser': 'feedparser',
         'beautifulsoup4': 'bs4',
         'arxiv': 'arxiv',
@@ -57,12 +57,12 @@ def test_api_connections():
     gemini_key = os.getenv('GEMINI_API_KEY')
     if gemini_key:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel('gemini-pro')
+            from google import genai
+            client = genai.Client(api_key=gemini_key)
+            model_name = os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')
             # Simple test call
-            response = model.generate_content("Test")
-            print("  ✅ Gemini API connection")
+            interaction = client.interactions.create(model=model_name, input="Test")
+            print(f"  ✅ Gemini API connection ({model_name}): {interaction.output_text[:60]!r}")
         except Exception as e:
             print(f"  ❌ Gemini API connection: {e}")
     else:

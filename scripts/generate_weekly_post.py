@@ -7,7 +7,9 @@ a LinkedIn post summarizing 3-5 major developments from the past week.
 """
 
 import os
+import re
 import sys
+import html
 import json
 import requests
 import feedparser
@@ -16,7 +18,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from urllib.parse import urlparse
 import pytz
-import google.generativeai as genai
+from google import genai
 from serpapi import GoogleSearch
 
 # Ensure emoji/status output doesn't crash on non-UTF-8 consoles (e.g. Windows cp1252).
@@ -25,7 +27,7 @@ try:
 except (AttributeError, ValueError):
     pass
 
-# Directory where generated posts live, organized into monthly subfolders.
+# Directory where generated posts live.
 POSTS_DIR = "posts"
 # Persistent record of every URL that has already been featured, so the same
 # story is never posted twice. Entries older than SEEN_RETENTION_DAYS are pruned.
@@ -64,17 +66,24 @@ except ImportError:
 class AIMLPostGenerator:
     def __init__(self):
         # Configure Gemini API
+        # Retired models (e.g. gemini-1.5-flash) make every call fail and silently
+        # push posts onto the canned fallback. Override with GEMINI_MODEL if needed.
+        self.gemini_model_name = os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')
         gemini_api_key = os.getenv('GEMINI_API_KEY')
-        if gemini_api_key:
-            genai.configure(api_key=gemini_api_key)
-            self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-        else:
-            self.gemini_model = None
+        self.gemini_client = genai.Client(api_key=gemini_api_key) if gemini_api_key else None
             
         self.serpapi_key = os.getenv('SERPAPI_KEY')
         self.developments = []
         # Map of normalized_url -> ISO date it was first featured.
         self.seen_urls = self._load_seen_store()
+
+    def ask_gemini(self, prompt: str) -> str:
+        """Send a prompt to Gemini via the Interactions API and return its text."""
+        interaction = self.gemini_client.interactions.create(
+            model=self.gemini_model_name,
+            input=prompt,
+        )
+        return (interaction.output_text or "").strip()
 
     def _load_seen_store(self) -> Dict[str, str]:
         """Load the persistent record of already-featured URLs."""
@@ -672,7 +681,7 @@ class AIMLPostGenerator:
         """Use AI to analyze and select the top 3-5 developments"""
         print("Analyzing developments with AI...")
         
-        if not self.gemini_model:
+        if not self.gemini_client:
             print("No Gemini API key found, using simple selection")
             # Simple fallback: select based on recency and source diversity
             selected = []
@@ -716,17 +725,18 @@ class AIMLPostGenerator:
             Example: 1, 3, 7, 12
             """
             
-            response = self.gemini_model.generate_content(prompt)
-            
-            # Parse the response to get selected indices
+            response_text = self.ask_gemini(prompt)
+
+            # Parse the 1-based numbers out of the reply (tolerates "1, 3, 7." etc.)
             selected_indices = []
-            try:
-                indices_str = response.text.strip()
-                selected_indices = [int(x.strip()) - 1 for x in indices_str.split(',') if x.strip().isdigit()]
-            except:
+            for num in re.findall(r'\d+', response_text):
+                idx = int(num) - 1
+                if 0 <= idx < len(all_developments) and idx not in selected_indices:
+                    selected_indices.append(idx)
+            if not selected_indices:
                 # Fallback to first 4 if parsing fails
                 selected_indices = [0, 1, 2, 3]
-            
+
             # Return selected developments
             return [all_developments[i] for i in selected_indices if i < len(all_developments)]
             
@@ -735,26 +745,43 @@ class AIMLPostGenerator:
             # Fallback selection
             return all_developments[:4]
     
+    @staticmethod
+    def week_label() -> str:
+        """Label for the week the post covers: the 7 days before the run date
+        (e.g. a Monday run covers the previous Monday through Sunday)."""
+        start = datetime.now() - timedelta(days=7)
+        end = datetime.now() - timedelta(days=1)
+        if start.year == end.year:
+            return f"{start.strftime('%B %d')} – {end.strftime('%B %d, %Y')}"
+        return f"{start.strftime('%B %d, %Y')} – {end.strftime('%B %d, %Y')}"
+
+    @staticmethod
+    def summary_line(dev: Dict[str, Any], max_len: int = 180) -> str:
+        """One clean sentence taken from the item's own summary, or "" if the
+        summary is missing or just repeats the title."""
+        text = dev.get('summary') or ''
+        text = html.unescape(re.sub(r'<[^>]+>', ' ', text))
+        text = re.sub(r'\s+', ' ', text).strip()
+        text = re.sub(r'(\.\.\.|…)$', '', text).strip()
+        title = (dev.get('title') or '').strip().lower()
+        if len(text) < 20 or text.lower() == title or text.lower() in title:
+            return ""
+        match = re.match(r'(.{40,}?[.!?])(\s|$)', text)
+        sentence = match.group(1) if match else text
+        if len(sentence) > max_len:
+            sentence = sentence[:max_len].rsplit(' ', 1)[0].rstrip(',;:') + '…'
+        return sentence
+
     def generate_linkedin_post(self, selected_developments: List[Dict[str, Any]]) -> str:
         """Generate the final LinkedIn post"""
         print("Generating LinkedIn post...")
-        
-        # Get current date for the post
-        current_date = datetime.now().strftime('%B %d, %Y')
-        
-        if not self.gemini_model:
-            # Fallback manual post generation
-            post = f"🚀 AI/ML Weekly Update - {current_date}\n\n"
-            post += "Here are the top AI/ML developments from last week:\n\n"
-            
-            for i, dev in enumerate(selected_developments, 1):
-                post += f"{i}. {dev['title']}\n"
-                post += f"   {dev['summary'][:150]}...\n"
-                post += f"   🔗 {dev['url']}\n\n"
-            
-            post += "#AI #MachineLearning #DeepLearning #ArtificialIntelligence #Tech #Innovation"
-            return post
-        
+
+        # The post covers last week's news, so label it with that week.
+        week = self.week_label()
+
+        if not self.gemini_client:
+            return self.generate_linkedin_post_fallback(selected_developments, week)
+
         try:
             # Prepare context for AI post generation
             developments_text = ""
@@ -765,55 +792,50 @@ class AIMLPostGenerator:
                 developments_text += f"   Source: {dev['source']}\n\n"
             
             prompt = f"""
-            Create an engaging LinkedIn post for AI/ML professionals summarizing these weekly developments.
+            Create an engaging LinkedIn post for AI/ML professionals summarizing last week's developments.
 
             Requirements:
             - Start with an engaging hook
             - Include exactly {len(selected_developments)} developments
-            - For each development: title, one-sentence insightful commentary, and URL
+            - For each development: title, one specific, insightful sentence of commentary
+              about what it means (never a generic filler line, and never the same wording twice), and URL
             - Use relevant emojis
             - End with appropriate hashtags
-            - Keep it professional but engaging
+            - Keep it professional but engaging and natural, not robotic
             - Total length should be suitable for LinkedIn (under 3000 characters)
 
             Developments:
             {developments_text}
 
-            Current date: {current_date}
+            The post covers the week of {week}. Refer to it as last week.
             """
-            
-            response = self.gemini_model.generate_content(prompt)
-            return response.text.strip()
-            
+
+            post = self.ask_gemini(prompt)
+            if not post:
+                raise ValueError("Gemini returned an empty response")
+            return post
+
         except Exception as e:
-            print(f"Error generating LinkedIn post: {e}")
+            print(f"Error generating LinkedIn post with Gemini ({self.gemini_model_name}): {e}")
             # Fallback to manual generation
-            return self.generate_linkedin_post_fallback(selected_developments, current_date)
-    
-    def generate_linkedin_post_fallback(self, selected_developments: List[Dict[str, Any]], current_date: str) -> str:
+            return self.generate_linkedin_post_fallback(selected_developments, week)
+
+    def generate_linkedin_post_fallback(self, selected_developments: List[Dict[str, Any]], week: str) -> str:
         """Fallback method for generating LinkedIn post without AI"""
-        post = f"🚀 AI/ML Weekly Roundup - {current_date}\n\n"
-        post += "This week's most significant developments in AI and Machine Learning:\n\n"
-        
+        post = f"🚀 AI/ML Weekly Roundup — {week}\n\n"
+        post += "Last week's most significant developments in AI and Machine Learning:\n\n"
+
         emojis = ["🧠", "⚡", "🔬", "💡", "🚀"]
-        
+
         for i, dev in enumerate(selected_developments):
             emoji = emojis[i % len(emojis)]
             post += f"{emoji} {dev['title']}\n"
-            
-            # Generate simple commentary based on source type
-            if dev['type'] == 'paper':
-                commentary = "Advancing the theoretical foundations of AI research."
-            elif dev['type'] == 'news':
-                commentary = "Another step forward in practical AI applications."
-            elif dev['type'] == 'repository':
-                commentary = "Open-source innovation driving AI accessibility."
-            else:
-                commentary = "Significant development in the AI landscape."
-            
-            post += f"   {commentary}\n"
+            # Use the item's own summary; skip the line rather than add filler.
+            commentary = self.summary_line(dev)
+            if commentary:
+                post += f"   {commentary}\n"
             post += f"   🔗 {dev['url']}\n\n"
-        
+
         post += "What development interests you most? Share your thoughts below! 👇\n\n"
         post += "#AI #MachineLearning #DeepLearning #ArtificialIntelligence #Tech #Innovation #Research #OpenSource"
         
@@ -844,37 +866,15 @@ class AIMLPostGenerator:
         for i, model in enumerate(selected_models, 1):
             title_parts = model['title'].split(' - ')[0] if ' - ' in model['title'] else model['title']
             
-            model_section += f"{i}. General: {title_parts}\n"
-            
-            # Generate description based on content and source
-            if model.get('source') == 'HuggingFace':
-                description = "New model release on HuggingFace platform demonstrates continued innovation in open-source AI development."
-            elif model.get('source') == 'arXiv':
-                description = "Recent research paper presents novel approaches and methodologies in AI model development."
-            elif 'openai' in model['title'].lower():
-                description = "OpenAI continues advancing AI capabilities with new model improvements and features."
-            elif 'claude' in model['title'].lower() or 'anthropic' in model['title'].lower():
-                description = "Anthropic's Claude family receives updates that enhance reasoning and safety capabilities."
-            elif 'meta' in model['title'].lower() or 'llama' in model['title'].lower():
-                description = "Meta's commitment to open-source AI continues to democratize advanced model capabilities."
-            elif 'google' in model['title'].lower() or 'gemini' in model['title'].lower():
-                description = "Google's Gemini models showcase significant progress in multimodal AI capabilities."
-            elif 'qwen' in model['title'].lower():
-                description = "Qwen models demonstrate impressive performance in multilingual understanding and reasoning tasks."
-            elif 'mistral' in model['title'].lower():
-                description = "Mistral AI continues to deliver high-performance models with efficient architectures."
-            elif 'open source' in model['title'].lower() or 'hugging face' in model['summary'].lower():
-                description = "Open-source innovation continues to drive accessibility and transparency in AI model development."
-            else:
-                description = "Significant advancement in AI model architecture and performance capabilities."
-            
-            model_section += f"{description}\n"
+            model_section += f"{i}. {title_parts}\n"
+
+            # Describe the item with its own summary rather than a canned vendor blurb.
+            description = self.summary_line(model)
+            if description:
+                model_section += f"{description}\n"
             model_section += f"Link: {model['url']}\n\n"
         
-        model_section += "These developments represent the latest advances in artificial intelligence model capabilities and accessibility. "
-        model_section += "The combination of research breakthroughs, commercial releases, and open-source contributions "
-        model_section += "continues to push the boundaries of what AI models can achieve.\n"
-        model_section += "\n#artificialintelligence #machinelearning #llm #openai #anthropic #meta #google #opensource #huggingface #arxiv"
+        model_section += "#artificialintelligence #machinelearning #llm #openai #anthropic #meta #google #opensource #huggingface #arxiv"
         
         return model_section
 
@@ -886,7 +886,7 @@ class AIMLPostGenerator:
         filename = os.path.join(POSTS_DIR, f"ai-ml-weekly-{timestamp}.md")
 
         with open(filename, 'w', encoding='utf-8') as f:
-            f.write(f"# AI/ML Weekly Post - {timestamp}\n\n")
+            f.write(f"# AI/ML Weekly Post - Week of {self.week_label()}\n\n")
             f.write("Generated by AI/ML LinkedIn Post Generator\n\n")
             f.write("## LinkedIn Post Content\n\n")
             f.write(post_content)
