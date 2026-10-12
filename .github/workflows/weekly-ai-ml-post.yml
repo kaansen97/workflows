@@ -2,10 +2,12 @@ name: Weekly AI/ML LinkedIn Post Generator
 
 on:
   schedule:
-    # Run every Monday at ~08:19 UTC.
+    # Run every Monday at ~00:23 UTC (02:23 CEST / 01:23 CET). Runs early on
+    # purpose: GitHub often starts scheduled runs hours late, so this leaves
+    # room for the post to be ready by morning.
     # NOTE: avoid ':00' minutes — GitHub's cron is best-effort and most often
     # delays or silently drops runs scheduled on the busy top-of-hour slot.
-    - cron: '19 8 * * 1'
+    - cron: '23 0 * * 1'
   workflow_dispatch: # Allow manual trigger for testing
 
 permissions:
